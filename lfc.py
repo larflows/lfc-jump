@@ -58,40 +58,43 @@ def hasJump(data, method = "average", factor = 3, localRange = 5):
     # no method is matched
     raise ValueError
 
-def area(depth, lfcDepth, lfcWidth, cWidth):
+def area(depth, lfcDepth, lfcWidth, cWidth, z):
+    # z = 0 for rectangular
+    topWidth = lfcWidth + 2 * lfcDepth * z if depth >= lfcDepth else lfcWidth + 2 * depth * z
     if depth < lfcDepth:
-        return depth * lfcWidth
+        return depth * (lfcWidth + topWidth) / 2
     else:
-        return (lfcDepth * lfcWidth) + (depth - lfcDepth) * cWidth
+        return (lfcDepth * (lfcWidth + topWidth) / 2) + (depth - lfcDepth) * cWidth
         
-def wp(depth, lfcDepth, lfcWidth, cWidth):
+def wp(depth, lfcDepth, lfcWidth, cWidth, z):
+    # z = 0 for rectangular
     if depth < lfcDepth:
-        return lfcWidth + 2 * depth
+        return lfcWidth + 2 * depth * (z**2 + 1)**(1/2)
     else:
-        return lfcWidth + 2 * lfcDepth + (cWidth - lfcWidth) + 2 * (depth - lfcDepth)
+        return lfcWidth + 2 * lfcDepth * (z**2 + 1)**(1/2) + (cWidth - lfcWidth) + 2 * (depth - lfcDepth)
         
-def radius(depth, lfcDepth, lfcWidth, cWidth):
-    return area(depth, lfcDepth, lfcWidth, cWidth) / wp(depth, lfcDepth, lfcWidth, cWidth)
+def radius(depth, lfcDepth, lfcWidth, cWidth, z):
+    return area(depth, lfcDepth, lfcWidth, cWidth, z) / wp(depth, lfcDepth, lfcWidth, cWidth, z)
     
-def manningQ(depth, c, n, lfcDepth, lfcWidth, cWidth):
-    return c / n * area(depth, lfcDepth, lfcWidth, cWidth) * radius(depth, lfcDepth, lfcWidth, cWidth)**(2/3) * slope ** (1/2)
+def manningQ(depth, c, n, lfcDepth, lfcWidth, cWidth, slope, z):
+    return c / n * area(depth, lfcDepth, lfcWidth, cWidth, z) * radius(depth, lfcDepth, lfcWidth, cWidth, z)**(2/3) * slope ** (1/2)
     
-def solveDepth(q, n, lfcDepth, lfcWidth, cWidth, c = 1.49, tolerance = 0.01):
+def solveDepth(q, n, lfcDepth, lfcWidth, cWidth, slope, z, c = 1.49, tolerance = 0.01):
     # Sort of a binary search thing
     # Initial bounds are arbitrary, but lower needs to be > 0
     lower = 0.01
     upper = 100
     depth = 0
     # First, find what the bounds should actually be
-    while manningQ(lower, c, n, lfcDepth, lfcWidth, cWidth) > q:
+    while manningQ(lower, c, n, lfcDepth, lfcWidth, cWidth, slope, z) > q:
         lower = lower / 2
-    while manningQ(upper, c, n, lfcDepth, lfcWidth, cWidth) < q:
+    while manningQ(upper, c, n, lfcDepth, lfcWidth, cWidth, slope, z) < q:
         upper = upper * 2
     
     found = False
     while not found:
         depth = (lower + upper) / 2
-        mq = manningQ(depth, c, n, lfcDepth, lfcWidth, cWidth)
+        mq = manningQ(depth, c, n, lfcDepth, lfcWidth, cWidth, slope, z)
         if (mq < q + tolerance) and (mq > q - tolerance):
             found = True
             break
@@ -107,13 +110,13 @@ def solveDepth(q, n, lfcDepth, lfcWidth, cWidth, c = 1.49, tolerance = 0.01):
         return False
             
             
-def testPerms(qs, ns, lfcds, lfcws, cws, c = 1.49, widthFactor = 3, jumpMethod = "local", jumpFactor = 3, log = True, increments = 100):
+def testPerms(qs, ns, lfcds, lfcws, cws, slopes, zs, c = 1.49, widthFactor = 3, jumpMethod = "local", jumpFactor = 3, log = True, increments = 100):
     # Test all permutations within the given ranges for whether they have a jump in the depths
     # If log, then notify the user every 1/increments of the total number of iterations
     # Also notify the user if a no-jump combination has been found.
     # widthFactor: minimum value for cw / lfcw in order to test combination
     depthsets = []
-    iters = len(ns) * len(lfcds) * len(lfcws) * len(cws)
+    iters = len(ns) * len(lfcds) * len(lfcws) * len(cws) * len(slopes) * len(zs)
     if log:
         print("Max total permutations: %d" % iters)
         print("**VERY** rough time estimate: %d minutes" % (TYPICAL_RATE * iters / 60))
@@ -123,23 +126,28 @@ def testPerms(qs, ns, lfcds, lfcws, cws, c = 1.49, widthFactor = 3, jumpMethod =
             for lfcw in lfcws:
                 for cw in cws:
                     if cw >= lfcw * widthFactor: # It is absurd for the main channel to be narrower than the LFC, and only useful if it is significantly wider
-                        depths = [solveDepth(q, n, lfcd, lfcw, cw) for q in qs]
-                        jump = hasJump(depths, jumpMethod, jumpFactor)
-                        depthsets.append({
-                            "jump": jump,
-                            "n": n,
-                            "lfcd": lfcd,
-                            "lfcw": lfcw,
-                            "cw": cw,
-                            "depths": depths
-                            })
-                        if log:
-                            """if not jump:
-                                print("No-jump combination found with n = %f, lfcd = %f, lfcw = %f, cw = %f (max depth = %f)" % (n, lfcd, lfcw, cw, depths[-1]))"""
-                            ld = len(depthsets)
-                            if (ld * increments) % iters == 0:
-                                pctDone = int(ld * 100 / iters)
-                                print("Progress: completed %d iterations (%d%%) in %d seconds \t[%s]" % (ld, pctDone, time() - start, ("#" * pctDone + " " * (100 - pctDone))))
+                        for slope in slopes:
+                            if slope > 0: # 0 slope simply won't flow
+                                for z in zs:
+                                    depths = [solveDepth(q, n, lfcd, lfcw, cw, slope, z) for q in qs]
+                                    jump = hasJump(depths, jumpMethod, jumpFactor)
+                                    depthsets.append({
+                                        "jump": jump,
+                                        "n": n,
+                                        "lfcd": lfcd,
+                                        "lfcw": lfcw,
+                                        "cw": cw,
+                                        "slope": slope,
+                                        "z": z,
+                                        "depths": depths
+                                        })
+                                    if log:
+                                        """if not jump:
+                                            print("No-jump combination found with n = %f, lfcd = %f, lfcw = %f, cw = %f (max depth = %f)" % (n, lfcd, lfcw, cw, depths[-1]))"""
+                                        ld = len(depthsets)
+                                        if (ld * increments) % iters == 0:
+                                            pctDone = int(ld * 100 / iters)
+                                            print("Progress: completed %d iterations (%d%%) in %d seconds \t[%s]" % (ld, pctDone, time() - start, ("#" * (pctDone // 4) + " " * ((100 - pctDone) // 4))))
     return depthsets
     
 def depthsetString(depthsets, prt = True, table = True):
@@ -162,18 +170,26 @@ def depthsetString(depthsets, prt = True, table = True):
                 dslfcd = [p for p in dsn if p["lfcd"] == lfcd]
                 uniqueLfcws = list(set([p["lfcw"] for p in dslfcd]))
                 for lfcw in uniqueLfcws:
-                    out.append("\t\tLFCW: %f" % lfcw)
+                    out.append("\t\LFCW: %f" % lfcw)
                     dslfcw = [p for p in dsn if p["lfcw"] == lfcw]
                     uniqueCws = list(set([p["cw"] for p in dslfcw]))
                     for cw in uniqueCws:
-                        out.append("\t\t\tCW: %f" % cw)
+                        out.append("\tCW: %f" % cw)
+                        dscw = [p for p in dslfcw if p["cw"] == cw]
+                        uniqueSlopes = list(set([p["slope"] for p in dscw]))
+                        for slope in uniqueSlopes:
+                            out.append("\tSlope: %f" % slope)
+                            dsslope = [p for p in dscw if p["slope" == slope]]
+                            uniqueZs = list(set([p["z"] for p in dsslope]))
+                            for z in uniqueZs:
+                                out.append("\tz: %f" % z)
         outStr = "\n".join(out)
     if table: # Make a table format
-        order = ["n", "LFC Depth (ft)", "LFC Width (ft)", "MC Width (ft)", "Min Depth (ft)", "Max Depth (ft)"]
-        paramsets = [[p["n"], p["lfcd"], p["lfcw"], p["cw"], p["depths"][0], p["depths"][-1]] for p in depthsets]
+        order = ["n", "LFC Depth (ft)", "LFC Width (ft)", "MC Width (ft)", "Slope", "z", "Min Depth (ft)", "Max Depth (ft)"]
+        paramsets = [[p["n"], p["lfcd"], p["lfcw"], p["cw"], p["slope"], p["z"], p["depths"][0], p["depths"][-1]] for p in depthsets]
         paramsets.sort()
         out = [order] + paramsets
-        outStr = "\n".join(["\t\t\t".join([i[:15] if len(i) > 15 else i for i in [str(i) for i in l]]) for l in out])
+        outStr = "\n".join(["\t\t".join([i[:15] if len(i) > 15 else i for i in [str(i) for i in l]]) for l in out])
     if prt:
         print(outStr)
     return out
@@ -205,6 +221,8 @@ Format: -identifier<param1-p2-...-pn>, e.g. -q1-5-10
     -f[path]        :       Write output to a CSV file at <path>.  Path is optional, but the default is specific
                                 to the developer's use case, so other users should always set the path.
     -a                      Use "average" jump detection method instead of "local".
+    -z<min-max-step>        z for trapezoidal LFC.  Default 0, 1, 1, i.e. 0 - rectangle.
+    -s<min-max-step>        Slope.  Default 0.001, 0.002, 0.001, i.e. 0.001.
     -h              :       Show this help message.
 """
 
@@ -222,6 +240,8 @@ if __name__ == "__main__":
     cws = list(floatRange(10, 100, 10))
     method = "local"
     jf = 3
+    zs = [0]
+    slopes = [0.001]
     write = False
     path = "Z:\\adit\\Desktop\\LARFlows\\Data Processing\\Calibration\\lfc.csv"
     args = sys.argv[1:]
@@ -236,7 +256,7 @@ if __name__ == "__main__":
             rg = []                     # Range from arguments
             num = 0                     # Numerical argument
             st = arg[2:]                # String argument
-            if specifier in "qndwc":    # Range arguments
+            if specifier in "qndwcsz":  # Range arguments
                 if len(vals) != 3:
                     print("Error: parameters to -%s require 3 values." % specifier)
                     help = True
@@ -257,13 +277,17 @@ if __name__ == "__main__":
                 cws = rg
             if specifier == "j":
                 jf = num
+            if specifier == "z":
+                zs = rg
+            if specifier == "s":
+                slopes = rg
             if specifier == "f":
                 write = True
                 if st != "":
                     path = st
             if specifier == "a":
                 method = "average"
-            if not specifier in "qndwcjfa":
+            if not specifier in "qndwcjfasz":
                 print("Error: nonexistent parameter specified.")
                 help = True
                 break
@@ -274,6 +298,6 @@ if __name__ == "__main__":
     if help:
         print(helpStr)
     if not help:
-        result = depthsetString(testPerms(qs, ns, lfcds, lfcws, cws, jumpFactor = jf))
+        result = depthsetString(testPerms(qs, ns, lfcds, lfcws, cws, slopes, zs, jumpFactor = jf))
         if write:
             writeCsv(result, path)
