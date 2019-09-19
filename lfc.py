@@ -76,25 +76,31 @@ def wp(depth, lfcDepth, lfcWidth, cWidth, z):
 def radius(depth, lfcDepth, lfcWidth, cWidth, z):
     return area(depth, lfcDepth, lfcWidth, cWidth, z) / wp(depth, lfcDepth, lfcWidth, cWidth, z)
     
-def manningQ(depth, c, n, lfcDepth, lfcWidth, cWidth, slope, z):
-    return c / n * area(depth, lfcDepth, lfcWidth, cWidth, z) * radius(depth, lfcDepth, lfcWidth, cWidth, z)**(2/3) * slope ** (1/2)
+def manningQ(depth, c, lfcn, mcn, lfcDepth, lfcWidth, cWidth, slope, z):
+    # mcn: main channel n
+    # Calculate WP-weighted n
+    totalWp = wp(depth, lfcDepth, lfcWidth, cWidth, z)
+    lfcWp = wp(lfcDepth, lfcDepth, lfcWidth, cWidth, z)
+    mcWp = totalWp - lfcWp
+    compositeN = (lfcn * lfcWp + mcn * mcWp) / totalWp
+    return c / compositeN * area(depth, lfcDepth, lfcWidth, cWidth, z) * radius(depth, lfcDepth, lfcWidth, cWidth, z)**(2/3) * slope ** (1/2)
     
-def solveDepth(q, n, lfcDepth, lfcWidth, cWidth, slope, z, c = 1.49, tolerance = 0.01):
+def solveDepth(q, lfcn, mcn, lfcDepth, lfcWidth, cWidth, slope, z, c = 1.49, tolerance = 0.01):
     # Sort of a binary search thing
     # Initial bounds are arbitrary, but lower needs to be > 0
     lower = 0.01
     upper = 100
     depth = 0
     # First, find what the bounds should actually be
-    while manningQ(lower, c, n, lfcDepth, lfcWidth, cWidth, slope, z) > q:
+    while manningQ(lower, c, lfcn, mcn, lfcDepth, lfcWidth, cWidth, slope, z) > q:
         lower = lower / 2
-    while manningQ(upper, c, n, lfcDepth, lfcWidth, cWidth, slope, z) < q:
+    while manningQ(upper, c, lfcn, mcn, lfcDepth, lfcWidth, cWidth, slope, z) < q:
         upper = upper * 2
     
     found = False
     while not found:
         depth = (lower + upper) / 2
-        mq = manningQ(depth, c, n, lfcDepth, lfcWidth, cWidth, slope, z)
+        mq = manningQ(depth, c, lfcn, mcn, lfcDepth, lfcWidth, cWidth, slope, z)
         if (mq < q + tolerance) and (mq > q - tolerance):
             found = True
             break
@@ -110,13 +116,14 @@ def solveDepth(q, n, lfcDepth, lfcWidth, cWidth, slope, z, c = 1.49, tolerance =
         return False
             
             
-def testPerms(qs, ns, lfcds, lfcws, cws, slopes, zs, c = 1.49, widthFactor = 3, jumpMethod = "local", jumpFactor = 3, log = True, increments = 100):
+def testPerms(qs, lfcns, mcnfs, lfcds, lfcws, cws, slopes, zs, c = 1.49, widthFactor = 3, jumpMethod = "local", jumpFactor = 3, log = True, increments = 100):
     # Test all permutations within the given ranges for whether they have a jump in the depths
     # If log, then notify the user every 1/increments of the total number of iterations
     # Also notify the user if a no-jump combination has been found.
     # widthFactor: minimum value for cw / lfcw in order to test combination
+    # mcnfs: Factors for mcn / lfcn, instead of testing unrelated sets of ns
     depthsets = []
-    iters = len(ns) * len(lfcds) * len(lfcws) * len(cws) * len(slopes) * len(zs)
+    iters = len(ns) * len(lfcds) * len(lfcws) * len(cws) * len(slopes) * len(zs) * len(mcnfs)
     if log:
         print("Max total permutations: %d" % iters)
         print("**VERY** rough time estimate: %d minutes" % (TYPICAL_RATE * iters / 60))
@@ -129,25 +136,27 @@ def testPerms(qs, ns, lfcds, lfcws, cws, slopes, zs, c = 1.49, widthFactor = 3, 
                         for slope in slopes:
                             if slope > 0: # 0 slope simply won't flow
                                 for z in zs:
-                                    depths = [solveDepth(q, n, lfcd, lfcw, cw, slope, z) for q in qs]
-                                    jump = hasJump(depths, jumpMethod, jumpFactor)
-                                    depthsets.append({
-                                        "jump": jump,
-                                        "n": n,
-                                        "lfcd": lfcd,
-                                        "lfcw": lfcw,
-                                        "cw": cw,
-                                        "slope": slope,
-                                        "z": z,
-                                        "depths": depths
-                                        })
-                                    if log:
-                                        """if not jump:
-                                            print("No-jump combination found with n = %f, lfcd = %f, lfcw = %f, cw = %f (max depth = %f)" % (n, lfcd, lfcw, cw, depths[-1]))"""
-                                        ld = len(depthsets)
-                                        if (ld * increments) % iters == 0:
-                                            pctDone = int(ld * 100 / iters)
-                                            print("Progress: completed %d iterations (%d%%) in %d seconds \t[%s]" % (ld, pctDone, time() - start, ("#" * (pctDone // 4) + " " * ((100 - pctDone) // 4))))
+                                    for mcnf in mcnfs:
+                                        depths = [solveDepth(q, n, n * mcnf, lfcd, lfcw, cw, slope, z) for q in qs]
+                                        jump = hasJump(depths, jumpMethod, jumpFactor)
+                                        depthsets.append({
+                                            "jump": jump,
+                                            "n": n,
+                                            "mcnf": mcnf,
+                                            "lfcd": lfcd,
+                                            "lfcw": lfcw,
+                                            "cw": cw,
+                                            "slope": slope,
+                                            "z": z,
+                                            "depths": depths
+                                            })
+                                        if log:
+                                            """if not jump:
+                                                print("No-jump combination found with n = %f, lfcd = %f, lfcw = %f, cw = %f (max depth = %f)" % (n, lfcd, lfcw, cw, depths[-1]))"""
+                                            ld = len(depthsets)
+                                            if (ld * increments) % iters == 0:
+                                                pctDone = int(ld * 100 / iters)
+                                                print("Progress: completed %d iterations (%d%%) in %d seconds \t[%s]" % (ld, pctDone, time() - start, ("#" * (pctDone // 4) + " " * ((100 - pctDone) // 4))))
     return depthsets
     
 def depthsetString(depthsets, prt = True, table = True):
@@ -185,8 +194,8 @@ def depthsetString(depthsets, prt = True, table = True):
                                 out.append("\tz: %f" % z)
         outStr = "\n".join(out)
     if table: # Make a table format
-        order = ["n", "LFC Depth (ft)", "LFC Width (ft)", "MC Width (ft)", "Slope", "z", "Min Depth (ft)", "Max Depth (ft)"]
-        paramsets = [[p["n"], p["lfcd"], p["lfcw"], p["cw"], p["slope"], p["z"], p["depths"][0], p["depths"][-1]] for p in depthsets]
+        order = ["n", "MC n Factor", "LFC Depth (ft)", "LFC Width (ft)", "MC Width (ft)", "Slope", "z", "Min Depth (ft)", "Max Depth (ft)"]
+        paramsets = [[p["n"], p["mcnf"], p["lfcd"], p["lfcw"], p["cw"], p["slope"], p["z"], p["depths"][0], p["depths"][-1]] for p in depthsets]
         paramsets.sort()
         out = [order] + paramsets
         outStr = "\n".join(["\t\t".join([i[:15] if len(i) > 15 else i for i in [str(i) for i in l]]) for l in out])
@@ -214,6 +223,7 @@ Format: -identifier<param1-p2-...-pn>, e.g. -q1-5-10
 
     -q<min-max-step>:       Minimum, maximum, and step flow rates (cfs).  Default 1, 100, 10.
     -n<min-max-step>:       Same thing, but Manning's n.  Default 0.01, 0.1, 0.01.
+    -m<min-max-step>:       Main channel n factors, i.e. main channel n / lfc n.  Default 1, 2, 1, i.e. 1.
     -d<min-max-step>:       LFC depths (ft).  Default 0.5, 10, 1.
     -w<min-max-step>:       LFC widths (ft).  Default 1, 50, 5.
     -c<min-max-step>:       Channel widths (ft).  Default 10, 100, 10.
@@ -235,6 +245,7 @@ def floatRange(start, end, step):
 if __name__ == "__main__":
     qs = list(floatRange(1, 1000, 10))
     ns = list(floatRange(0.01, 0.1, 0.01))
+    mcnfs = [1]
     lfcds = list(floatRange(0.5, 10, 1))
     lfcws = list(floatRange(1, 50, 5))
     cws = list(floatRange(10, 100, 10))
@@ -256,7 +267,7 @@ if __name__ == "__main__":
             rg = []                     # Range from arguments
             num = 0                     # Numerical argument
             st = arg[2:]                # String argument
-            if specifier in "qndwcsz":  # Range arguments
+            if specifier in "qndwcszm": # Range arguments
                 if len(vals) != 3:
                     print("Error: parameters to -%s require 3 values." % specifier)
                     help = True
@@ -281,13 +292,15 @@ if __name__ == "__main__":
                 zs = rg
             if specifier == "s":
                 slopes = rg
+            if specifier == "m":
+                mcnfs = rg
             if specifier == "f":
                 write = True
                 if st != "":
                     path = st
             if specifier == "a":
                 method = "average"
-            if not specifier in "qndwcjfasz":
+            if not specifier in "qndwcjfaszm":
                 print("Error: nonexistent parameter specified.")
                 help = True
                 break
@@ -298,6 +311,6 @@ if __name__ == "__main__":
     if help:
         print(helpStr)
     if not help:
-        result = depthsetString(testPerms(qs, ns, lfcds, lfcws, cws, slopes, zs, jumpFactor = jf))
+        result = depthsetString(testPerms(qs, ns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpFactor = jf))
         if write:
             writeCsv(result, path)
