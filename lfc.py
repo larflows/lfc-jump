@@ -248,7 +248,7 @@ def depthsetString(depthsets, prt = True, table = True):
         print(outStr)
     return out
     
-def findOptimal(qs, lfcns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "local", jumpFactor = 3, log = True, upperBoundJ = 5, upperBoundR = 2, tolerance = 0.01, iterLimit = 20, printSets = True):
+def findOptimal(qs, lfcns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "local", jumpFactor = 3, log = True, upperBoundJ = 5, upperBoundR = 1, tolerance = 0.01, iterLimit = 20, printSets = False):
     # Use a "binary search" method to find the optimal combination of parameters
     # Tolerance is the precision of bounds finding
     # Upper bound: maximum jump or relative factor to assume that no reasonable solution will be found
@@ -273,7 +273,7 @@ def findOptimal(qs, lfcns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "l
     if (iteration(upper) == 0):
         if log:
             print("No no-jump solution found with method %s" % method)
-        return False
+        return (False, [])
     else:
         # Keep iterating until a single (within tolerance) point is found where solutions = 1
         count = 0
@@ -298,6 +298,21 @@ def writeCsv(depthsetTable, path):
     with open(path, "w") as of:
         of.write("\n".join([",".join([str(f) for f in i]) for i in depthsetTable]))
         
+def streamCsv(out, path, length = 0, append = False, increments = 100):
+    # Specify nonzero est. length in order to keep track of progress
+    print("Streaming CSV to %s" % path)
+    count = 0
+    incr = length // increments
+    mode = "a" if append else "w"
+    with open(path, mode) as f:
+        for entry in out:
+            f.write(",".join([str(i) for i in entry]))
+            f.write("\n")
+            if length > 0:
+                count += 1
+                if count % incr == 0:
+                    print("Written %d entries (%d%%)" % (count, count * 100 / length))
+        
 def ratingCurve(qs, lfcn, mcnf, lfcDepth, lfcWidth, cWidth, slope, z, graphWidth = 25):
     # Print out a rating curve graph to the console
     mcn = lfcn * mcnf
@@ -313,6 +328,36 @@ def ratingCurve(qs, lfcn, mcnf, lfcDepth, lfcWidth, cWidth, slope, z, graphWidth
     for (q, h) in depths:
         sout = "%s %s" % (numString(q, h), "X" * int(h / increment))
         print(sout)
+
+def generateRatingCurves(qs, lfcns, lfcds, lfcws, cws, slopes, zs, c = 1.49, log = True, progress = False):
+    # Generate rating curves
+    perms = len(lfcns) * len(lfcds) * len(lfcws) * len(cws) * len(slopes) * len(zs)
+    iters = perms * len(qs)
+    start = time()
+    count = 0
+    if log:
+        print("Total permutations: %d (iterations: %d)" % (perms, iters))
+    yield(["Q.cfs", "Depth.ft", "LFCn", "LFCd.ft", "LFCw.ft", "CW.ft", "Slope", "Z"])
+    for lfcn in lfcns:
+        for lfcd in lfcds:
+            for lfcw in lfcws:
+                for cw in cws:
+                    if cw > lfcw:
+                        for slope in slopes:
+                            for z in zs:
+                                for q in qs:
+                                    yield([q,
+                                        solveDepth(q, lfcn, lfcn, lfcd, lfcw, cw, slope, z, c),
+                                        lfcn,
+                                        lfcd,
+                                        lfcw,
+                                        cw,
+                                        slope,
+                                        z
+                                        ])
+                                count += 1
+                                if progress:
+                                    print("Completed %d permutations (%d%%) in %d seconds" % (count, (count * 100) / perms, time() - start))
     
 helpStr = """Low Flow Channel Permutations:
 This program tests if there are any permutations of parameters
@@ -344,8 +389,9 @@ All <min-max-step> parameters can be replaced by <value> in order to only test o
                                 The default factor is 0.05.
     -p              :       Print out rating curve.  Will use the first value in each range except for q.
     -o              :       Search for the optimal solution under the given parameters.  Will run many iterations
-                                and likely take quite some time.  In this case -j specifies jump factor for use
-                                with relative method and -r is ignored.
+                                and likely take quite some time.  If -r is specified, will only test relative jump
+                                (normally local jump is tested first) using the specified j factor.
+    -curves         :       Generate depth solutions for rating curves and write to the specified path from -f.    
     -h              :       Show this help message.
 """
 
@@ -373,6 +419,7 @@ if __name__ == "__main__":
     help = False
     rc = False
     optimal = False
+    ratingCurve = False
     for arg in args:
         if arg == "-h" or arg == "--help" or arg == "help":
             help = True
@@ -383,7 +430,7 @@ if __name__ == "__main__":
             rg = []                     # Range from arguments
             num = 0                     # Numerical argument
             st = arg[2:]                # String argument
-            if specifier in "qndwcszm": # Range arguments
+            if specifier in "qndwcszm" and not (arg == "-curves"): # Range arguments
                 if len(vals) == 3:
                     vals = [float(a) for a in vals]
                     rg = list(floatRange(vals[0], vals[1], vals[2]))
@@ -403,7 +450,9 @@ if __name__ == "__main__":
                 lfcds = rg
             if specifier == "w":
                 lfcws = rg
-            if specifier == "c":
+            if arg == "-curves":
+                ratingCurve = True
+            if specifier == "c" and not (arg == "-curves"):
                 cws = rg
             if specifier == "j":
                 jf = num
@@ -427,7 +476,7 @@ if __name__ == "__main__":
                 method = "average"
             if specifier == "p":
                 rc = True
-            if not specifier in "qndwcjfaszmrpo":
+            if not (specifier in "qndwcjfaszmrpo" or arg in ["-curve"]):
                 print("Error: nonexistent parameter specified.")
                 help = True
                 break
@@ -440,13 +489,20 @@ if __name__ == "__main__":
     elif rc:
         ratingCurve(qs, ns[0], mcnfs[0], lfcds[0], lfcws[0], cws[0], slopes[0], zs[0])
     elif optimal:
-        (jOpt, jIter) = findOptimal(qs, ns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "local")
-        (rOpt, rIter) = findOptimal(qs, ns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "relative", jumpFactor = jf)
+        (jOpt, jIter) = findOptimal(qs, ns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "local") if method != "relative" else (jf, [])
+        # Set jumpFactor < jOpt to avoid regular jump catching everything from the relative jump
+        (rOpt, rIter) = findOptimal(qs, ns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpMethod = "relative", jumpFactor = jOpt * 0.75 if jOpt > 1.33 else 1.1)
         print("Optimal j: %f; optimal r: %f" % (jOpt, rOpt))
         print("Optimal j parameters:")
         depthsetString(jIter)
         print("Optimal r parameters:")
         depthsetString(rIter)
+    elif ratingCurve:
+        streamCsv(
+            generateRatingCurves(qs, ns, lfcds, lfcws, cws, slopes, zs),
+            path,
+            length = len(qs) * len(ns) * len(lfcds) * len(lfcws) * len(cws) * len(slopes) * len(zs)
+        )
     else:
         result = depthsetString(testPerms(qs, ns, mcnfs, lfcds, lfcws, cws, slopes, zs, jumpFactor = jf, jumpMethod = method, relativeFactor = rf))
         if write:
